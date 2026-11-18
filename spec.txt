@@ -1,0 +1,106 @@
+Overview
+tpt-somatic is a real-time, hardware-agnostic biometric ingestion and biofeedback bridge.
+It is designed to connect physical sensors (EEG, ECG, thermal, motion capture) to the broader TPT ecosystem. It does not reinvent digital signal processing or computational physiology. Instead, it acts as the specialized orchestration layer that:
+Ingests raw hardware streams.
+Leverages tpt-dsp for real-time-safe, zero-allocation feature extraction.
+Formats and streams aggregated time-series data into tpt-soma using tpt-strata as the native, licensing-safe columnar transport format.
+Provides low-latency biofeedback (TUI, audio, haptic) to the user.
+The Open Protocol Mandate (Zero Proprietary Codecs)
+tpt-somatic strictly forbids the use of proprietary codecs, closed-source vendor firmware, or undocumented binary formats.
+If a hardware vendor requires a proprietary codec to decode their data stream, or uses a proprietary Bluetooth profile, we do not use it. Instead, we will:
+Source open-hardware alternatives that stream raw, uncompressed ADC values.
+Write our own open-source embedded firmware (tpt-somatic-firmware) to bypass the vendor's proprietary firmware and stream raw bytes.
+Define our own open, self-describing binary wire protocol (tpt-somatic-wire) if no suitable open standard exists for the required bandwidth.
+All data must arrive at the ingestion layer as raw, mathematically pure samples. All compression, filtering, and feature extraction happens on the host using tpt-dsp.
+Ecosystem Integration
+[ Physical Sensors ] 
+  (Open-source hardware / Custom ESP32+nRF52 nodes)
+       │ (Raw ADC / Uncompressed bytes)
+       ▼
+┌───────────────────────────────────────────────────┐
+│                tpt-somatic                        │  <-- THIS REPO
+│  • tpt-somatic-io (Hardware transport)            │
+│  • tpt-somatic-wire (Custom open wire protocol)   │
+│  • tpt-somatic-pipeline (DSP via tpt-dsp)         │
+│  • tpt-somatic-bridge (Columnar batching)         │
+└─────────────────────────┬─────────────────────────┘
+                          │ (Uses for hot-path DSP)
+                          ▼
+                  [ tpt-dsp ] 
+          (tpt-dsp-core, tpt-dsp-analysis)
+                          │ (Extracted features: HRV, PSD, coherence)
+                          ▼
+                [ tpt-strata ]  <-- NATIVE COLUMNAR FORMAT
+       (Zero-boilerplate, MIT-safe columnar batches)
+                          │ (Serialized time-series data)
+                          ▼
+                  [ tpt-soma ] 
+       (tpt-soma-chronos, tpt-soma-simulacrum)
+Module Structure
+tpt-somatic-io
+Hardware transport and physical connectivity.
+Responsibilities: USB/Serial/Bluetooth transport. Non-blocking readers that push raw frames into lock-free SPSC queues.
+Constraint: Must not contain any proprietary decoding logic. Only reads raw bytes or standard open frames.
+tpt-somatic-wire
+The TPT Open Sensor Protocol.
+Responsibilities: A self-describing, allocation-free, binary wire format for streaming raw sensor data over UART/USB/BLE.
+Design: Designed to be no_std compatible so it can be embedded directly into microcontrollers. It handles framing, checksums, and channel mapping for multi-modal sensors.
+tpt-somatic-firmware
+Reference firmware for custom sensor nodes.
+Responsibilities: Pure Rust (no_std) firmware for ESP32-S3, nRF52, or RP2040 microcontrollers.
+Purpose: If we buy off-the-shelf sensor boards but want to strip out proprietary vendor firmware, this crate provides the replacement code to read the raw SPI/I2C sensors and push them over tpt-somatic-wire.
+tpt-somatic-pipeline
+Real-time processing orchestration.
+Responsibilities: Pull raw frames from tpt-somatic-io, apply real-time-safe DSP via tpt-dsp, and output feature vectors.
+Integration: Uses tpt-dsp-core for filtering and tpt-dsp-analysis for windowed FFT, RMS, and spectral descriptors.
+Guarantee: The hot path remains strictly allocation-free, validated by tpt-dsp-testkit patterns (assert_no_alloc).
+tpt-somatic-bridge
+The translation layer to tpt-soma via tpt-strata.
+Responsibilities: Aggregate per-second or per-epoch feature vectors into native tpt-strata columnar batches.
+Data Model: Maps physical metrics (e.g., "EEG Gamma Synchrony", "HRV Coherence") to the schema expected by tpt-soma-chronos for longitudinal tracking and tpt-soma-simulacrum for digital twin calibration. No Apache Arrow dependencies are used.
+tpt-somatic-anomaly
+Higher-level pattern recognition for "esoteric" or edge-case physiological states.
+Responsibilities: Detect statistically improbable multi-modal correlations (e.g., simultaneous thermal bloom + HRV spike + motion stillness).
+Implementation: Rule-based engines or lightweight embedded ML inference. Distinct from tpt-soma-pathos, which handles established clinical pathology.
+tpt-somatic-app
+User-facing biofeedback and control.
+Responsibilities: Real-time TUI dashboard (ratatui), low-latency audio/haptic feedback (tpt-dsp-audio), and CLI session recording.
+Dependency Strategy (Strictly MIT-Compatible)
+To maintain a frictionless, legally clean ecosystem, all dependencies must be audited via cargo-deny.
+Internal Ecosystem: tpt-dsp, tpt-strata, tpt-soma (specifically tpt-soma-chronos, tpt-soma-simulacrum).
+Hardware/Async: tokio, serialport, btleplug, crossbeam.
+Data/Serialization: tpt-strata (native columnar), bincode, serde.
+UI/Feedback: ratatui, tpt-dsp-audio.
+Note: Apache Arrow is explicitly banned. Any dependency that is Apache-2.0 only (without MIT dual-licensing) or requires proprietary blobs will be rejected. tpt-strata is the sole authorized columnar format for this stack.
+Performance & Safety Requirements
+Real-Time Safety: The core processing pipeline (tpt-somatic-pipeline) must be provably allocation-free in its hot path.
+Latency: End-to-end sensor-to-biofeedback loop must be < 50ms.
+Backpressure: If tpt-soma or the disk is slow, the ingestion layer must gracefully degrade (e.g., drop frames or downsample) without panicking or blocking the hardware read thread.
+no_std Compatibility: tpt-somatic-wire and tpt-somatic-pipeline must be no_std + alloc compatible, allowing them to run on embedded microcontrollers.
+Testing Strategy
+Unit Tests: Property-based testing for feature extraction logic.
+Integration Tests: Mock hardware interfaces feeding synthetic data through the pipeline to verify the tpt-somatic-bridge outputs valid tpt-strata columnar batches.
+Allocation Tests: Use counting allocators (following tpt-dsp-testkit patterns) to prove the DSP pipeline does not allocate during process() calls.
+CI: Mirror tpt-dsp's rigorous CI, including cargo-deny, clippy, fmt, and cross-compilation checks.
+Deployment
+Local Development
+cargo build --release
+cargo run --bin tpt-somatic-app
+
+Production Deployment
+Standalone Binary: Single executable with embedded assets
+Docker: Containerized deployment for server scenarios
+Edge Devices: Optimized builds for Raspberry Pi, Jetson Nano, or embedded microcontrollers
+License
+MIT License Only.
+Released under the MIT license to maximize adoption, minimize legal friction, and align with the broader tpt-* ecosystem standards.
+</content>
+</write_to_file>
+Done. The design spec at tpt-somatic/DESIGN.md is now finalized with:
+tpt-strata as the native columnar format (no Apache Arrow)
+tpt-dsp integration for real-time-safe signal processing
+tpt-soma integration for computational physiology
+Open Protocol Mandate forbidding proprietary codecs
+tpt-somatic-wire and tpt-somatic-firmware for custom hardware control
+MIT-only licensing with strict dependency auditing
+The entire stack is now legally frictionless, technically self-contained, and fully aligned with your ecosystem philosophy.

@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/target/
+# Libraries should not commit Cargo.lock; binaries (tpt-somatic-app) should.
+# Keep it tracked for reproducible app builds.
+
+# Firmware build output
+/tpt-somatic-firmware/target/
+
+# Session recordings / captured data
+*.strata
+*.rec
+/sessions/
+/recordings/
+
+# Environment / secrets
+.env
+.env.*
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Profiling / fuzz artifacts
+flamegraph.svg
+perf.data*
+**/fuzz/artifacts/
+**/fuzz/corpus/
